@@ -89,7 +89,7 @@ class MyModel(nn.Module):
     @classmethod
     def from_pretrained(cls, args):
         device = torch.device(f'cuda:{args.cuda}')
-        models_path = 'resources/models'
+        models_path = 'model'
 
         encoder_t_path = f'{models_path}/transformers/{args.encoder_t}'
         tokenizer = AutoTokenizer.from_pretrained(encoder_t_path)
@@ -106,7 +106,7 @@ class MyModel(nn.Module):
             hid_dim_v = None
 
         if args.stacked:
-            flair.cache_root = 'resources/models'
+            flair.cache_root = 'model'
             flair.device = device
             token_embedding = StackedEmbeddings([
                 WordEmbeddings('crawl'),
@@ -161,8 +161,16 @@ class MyModel(nn.Module):
     def ner_encode(self, pairs: List[MyPair], gate_signal=None):
         sentence_batch = [pair.sentence for pair in pairs]
         tokens_batch = [[token.text for token in sentence] for sentence in sentence_batch]
-        inputs = self.tokenizer(tokens_batch, is_split_into_words=True, padding=True, return_tensors='pt',
-                                return_special_tokens_mask=True, return_offsets_mapping=True).to(self.device)
+
+        inputs = self.tokenizer(
+            tokens_batch,
+            is_split_into_words=True,
+            padding=True,
+            return_tensors='pt',
+            return_attention_mask=True,
+            return_offsets_mapping=True,
+            truncation=True
+        ).to(self.device)
 
         if self.encoder_v:
             outputs = self._bert_forward_with_image(inputs, pairs, gate_signal)
@@ -176,34 +184,25 @@ class MyModel(nn.Module):
             )
             feat_batch = outputs.last_hidden_state
 
-        ids_batch = inputs.input_ids
-        offset_batch = inputs.offset_mapping
-        mask_batch = inputs.special_tokens_mask.bool().bitwise_not()
-        for sentence, ids, offset, mask, feat in zip(sentence_batch, ids_batch, offset_batch, mask_batch, feat_batch):
-            ids = ids[mask]
-            offset = offset[mask]
-            feat = feat[mask]
-            subtokens = self.tokenizer.convert_ids_to_tokens(ids)
-            length = len(subtokens)
+        # ⚠ 关键改动：使用 word_ids 精准对齐原词和子词特征
+        word_ids_batch = [inputs.word_ids(batch_index=i) for i in range(len(sentence_batch))]
 
-            token_list = []
-            feat_list = []
-            i = 0
-            while i < length:
-                j = i + 1
-                # the 'or' condition is for processing Korea characters
-                while j < length and (offset[j][0] != 0 or subtokens[j].startswith(SUBTOKEN_PREFIX)):
-                    j += 1
-                token_list.append(''.join(subtokens[i:j]))
-                feat_list.append(torch.mean(feat[i:j], dim=0))
-                i = j
-            assert len(sentence) == len(token_list)
+        for sent_idx, (sentence, word_ids, feats) in enumerate(zip(sentence_batch, word_ids_batch, feat_batch)):
+            token_feats = [[] for _ in range(len(sentence))]
 
-            for token, token_feat in zip(sentence, feat_list):
-                token.feat = token_feat
+            for i, word_id in enumerate(word_ids):
+                if word_id is None or word_id >= len(sentence):
+                    continue
+                token_feats[word_id].append(feats[i])
+
+            for i, token in enumerate(sentence):
+                if len(token_feats[i]) == 0:
+                    token.feat = torch.zeros(self.hid_dim_t, device=self.device)
+                else:
+                    token.feat = torch.mean(torch.stack(token_feats[i]), dim=0)
 
             if self.token_embedding is not None:
-                flair_sentence = FlairSentence(str(sentence))
+                flair_sentence = FlairSentence(" ".join([t.text for t in sentence]))
                 flair_sentence.tokens = [FlairToken(token.text) for token in sentence]
                 self.token_embedding.embed(flair_sentence)
                 for token, flair_token in zip(sentence, flair_sentence):
@@ -279,3 +278,4 @@ class MyModel(nn.Module):
         pred = torch.argmax(logits, dim=1).tolist()
 
         return loss, pred
+

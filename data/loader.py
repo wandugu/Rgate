@@ -107,7 +107,7 @@ def token_count(dataset: MyDataset) -> str:
 
 
 if __name__ == "__main__":
-    twitter2015 = load_ner_corpus('resources/datasets/twitter2015')
+    twitter2015 = load_ner_corpus('datasets/twitter2015')
     twitter2015_train_statistic = type_count(twitter2015.train)
     twitter2015_dev_statistic = type_count(twitter2015.dev)
     twitter2015_test_statistic = type_count(twitter2015.test)
@@ -125,7 +125,7 @@ if __name__ == "__main__":
 
     print()
 
-    twitter2017 = load_ner_corpus('resources/datasets/twitter2017')
+    twitter2017 = load_ner_corpus('datasets/twitter2017')
     twitter2017_train_statistic = token_count(twitter2017.train)
     twitter2017_dev_statistic = token_count(twitter2017.dev)
     twitter2017_test_statistic = token_count(twitter2017.test)
