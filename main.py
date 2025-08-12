@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from data import loader
+from data.dataset import collate_fn
 from model.model import MyModel
 from utils import seed_worker, seed_everything, train, evaluate
 import warnings
@@ -45,10 +46,10 @@ def main():
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
     ner_corpus = loader.load_ner_corpus(f'datasets/{args.dataset}', load_image=(args.encoder_v != ''))
-    ner_train_loader = DataLoader(ner_corpus.train, batch_size=args.bs, collate_fn=list, num_workers=args.num_workers,
+    ner_train_loader = DataLoader(ner_corpus.train, batch_size=args.bs, collate_fn=collate_fn, num_workers=args.num_workers,
                                   shuffle=True, worker_init_fn=seed_worker, generator=generator)
-    ner_dev_loader = DataLoader(ner_corpus.dev, batch_size=args.bs, collate_fn=list, num_workers=args.num_workers)
-    ner_test_loader = DataLoader(ner_corpus.test, batch_size=args.bs, collate_fn=list, num_workers=args.num_workers)
+    ner_dev_loader = DataLoader(ner_corpus.dev, batch_size=args.bs, collate_fn=collate_fn, num_workers=args.num_workers)
+    ner_test_loader = DataLoader(ner_corpus.test, batch_size=args.bs, collate_fn=collate_fn, num_workers=args.num_workers)
 
     if args.aux:
         itr_corpus = loader.load_itr_corpus('datasets/relationship')
@@ -65,6 +66,10 @@ def main():
     if args.encoder_v:
         params.append({'params': model.encoder_v.parameters(), 'lr': args.lr})
         params.append({'params': model.proj.parameters(), 'lr': args.lr * 100})
+        params.append({'params': model.txt_proj.parameters(), 'lr': args.lr * 100})
+        params.append({'params': model.img_proj.parameters(), 'lr': args.lr * 100})
+        params.append({'params': model.itm_head.parameters(), 'lr': args.lr * 100})
+        params.append({'params': [model.logit_scale], 'lr': args.lr * 100})
     if args.rnn:
         params.append({'params': model.rnn.parameters(), 'lr': args.lr * 100})
     if args.crf:

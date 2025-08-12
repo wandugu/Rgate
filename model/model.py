@@ -73,6 +73,31 @@ class MyModel(nn.Module):
         self.proj = nn.Linear(hid_dim_v, hid_dim_t) if encoder_v else None
         self.aux_head = nn.Linear(hid_dim_t, 2)
         self.fine_gate = FineGrainedGate(hid_dim_t) if (encoder_v and gate) else None
+        if encoder_v:
+            self.txt_proj = nn.Linear(hid_dim_t, hid_dim_t)
+            self.img_proj = nn.Linear(hid_dim_t, hid_dim_t)
+            self.logit_scale = nn.Parameter(torch.tensor(4.6052))
+            self.itm_head = nn.Sequential(
+                nn.Linear(hid_dim_t, hid_dim_t // 2),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(hid_dim_t // 2, 1)
+            )
+            self.freeze_gate = True
+            self.r_budget = 0.35
+            self.a = 1.0
+            self.b = 0.5
+            self.lmbd = 0.2
+        else:
+            self.txt_proj = None
+            self.img_proj = None
+            self.logit_scale = None
+            self.itm_head = None
+            self.freeze_gate = False
+            self.r_budget = 0.0
+            self.a = 0.0
+            self.b = 0.0
+            self.lmbd = 0.0
         if self.token_embedding:
             self.hid_dim_t += self.token_embedding.embedding_length
         if rnn:
@@ -158,6 +183,28 @@ class MyModel(nn.Module):
             return_dict=True
         )
 
+    def _bert_forward_with_visual(self, inputs, visual_embeds):
+        textual_embeds = self.encoder_t.embeddings.word_embeddings(inputs.input_ids)
+        inputs_embeds = torch.cat((textual_embeds, visual_embeds), dim=1)
+
+        batch_size = visual_embeds.size(0)
+        visual_length = visual_embeds.size(1)
+
+        attention_mask = inputs.attention_mask
+        visual_mask = torch.ones((batch_size, visual_length), dtype=attention_mask.dtype, device=self.device)
+        attention_mask = torch.cat((attention_mask, visual_mask), dim=1)
+
+        token_type_ids = inputs.token_type_ids
+        visual_type_ids = torch.ones((batch_size, visual_length), dtype=token_type_ids.dtype, device=self.device)
+        token_type_ids = torch.cat((token_type_ids, visual_type_ids), dim=1)
+
+        return self.encoder_t(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            return_dict=True
+        )
+
     def ner_encode(self, pairs: List[MyPair]):
         sentence_batch = [pair.sentence for pair in pairs]
         tokens_batch = [[token.text for token in sentence] for sentence in sentence_batch]
@@ -222,10 +269,93 @@ class MyModel(nn.Module):
                 for token, flair_token in zip(sentence, flair_sentence):
                     token.feat = torch.cat((token.feat, flair_token.embedding))
 
-    def ner_forward(self, pairs: List[MyPair]):
-        self.ner_encode(pairs)
-
+    def ner_forward(self, batch):
+        pairs = batch["pairs"] if isinstance(batch, dict) else batch
         sentences = [pair.sentence for pair in pairs]
+        tokens_batch = [[token.text for token in sent] for sent in sentences]
+
+        inputs = self.tokenizer(
+            tokens_batch,
+            is_split_into_words=True,
+            padding=True,
+            return_tensors='pt',
+            return_attention_mask=True,
+            return_offsets_mapping=True,
+            truncation=True
+        ).to(self.device)
+
+        if self.encoder_v is None:
+            outputs = self.encoder_t(
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                token_type_ids=inputs.token_type_ids,
+                return_dict=True
+            )
+            feat_batch = outputs.last_hidden_state
+            L_itm = torch.tensor(0.0, device=self.device)
+            L_nce = torch.tensor(0.0, device=self.device)
+            r_hat = torch.tensor(1.0, device=self.device).unsqueeze(0)
+            r_bar = r_hat.mean()
+        else:
+            images = [pair.image for pair in pairs]
+            visual_embeds = torch.stack([img.data for img in images]).to(self.device)
+            if not use_cache(self.encoder_v, images):
+                visual_embeds = resnet_encode(self.encoder_v, visual_embeds)
+            visual_embeds = self.proj(visual_embeds)
+
+            B = visual_embeds.size(0)
+            neg_idx = torch.roll(torch.arange(B), shifts=1)
+            visual_neg = visual_embeds[neg_idx]
+
+            text_outputs = self.encoder_t(
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                token_type_ids=inputs.token_type_ids,
+                return_dict=True
+            )
+            cls_txt = text_outputs.last_hidden_state[:, CLS_POS]
+            z_t = F.normalize(self.txt_proj(cls_txt), dim=-1)
+            z_i = F.normalize(self.img_proj(visual_embeds.mean(1)), dim=-1)
+            sim = self.logit_scale.exp() * (z_t @ z_i.t())
+            target = torch.arange(B, device=self.device)
+            L_nce_t = F.cross_entropy(sim, target)
+            L_nce_i = F.cross_entropy(sim.t(), target)
+            L_nce = 0.5 * (L_nce_t + L_nce_i)
+
+            outputs_pos = self._bert_forward_with_visual(inputs, visual_embeds)
+            outputs_neg = self._bert_forward_with_visual(inputs, visual_neg)
+            cls_pos = outputs_pos.last_hidden_state[:, CLS_POS]
+            cls_neg = outputs_neg.last_hidden_state[:, CLS_POS]
+
+            logits_itm = self.itm_head(torch.cat([cls_pos, cls_neg], dim=0)).squeeze(-1)
+            labels_itm = torch.cat([torch.ones(B), torch.zeros(B)], dim=0).to(self.device)
+            L_itm = F.binary_cross_entropy_with_logits(logits_itm, labels_itm)
+
+            r_hat = torch.sigmoid(self.itm_head(cls_pos))
+            visual_gated = (r_hat.detach() if self.freeze_gate else r_hat) * visual_embeds
+            outputs = self._bert_forward_with_visual(inputs, visual_gated)
+            feat_batch = outputs.last_hidden_state[:, :inputs.input_ids.size(1)]
+            r_bar = r_hat.mean()
+
+        word_ids_batch = [inputs.word_ids(batch_index=i) for i in range(len(sentences))]
+        for sentence, word_ids, feats in zip(sentences, word_ids_batch, feat_batch):
+            token_feats = [[] for _ in range(len(sentence))]
+            for i, word_id in enumerate(word_ids):
+                if word_id is None or word_id >= len(sentence):
+                    continue
+                token_feats[word_id].append(feats[i])
+            for i, token in enumerate(sentence):
+                if len(token_feats[i]) == 0:
+                    token.feat = torch.zeros(self.hid_dim_t, device=self.device)
+                else:
+                    token.feat = torch.mean(torch.stack(token_feats[i]), dim=0)
+            if self.token_embedding is not None:
+                flair_sentence = FlairSentence(" ".join([t.text for t in sentence]))
+                flair_sentence.tokens = [FlairToken(token.text) for token in sentence]
+                self.token_embedding.embed(flair_sentence)
+                for token, flair_token in zip(sentence, flair_sentence):
+                    token.feat = torch.cat((token.feat, flair_token.embedding))
+
         batch_size = len(sentences)
         lengths = [len(sentence) for sentence in sentences]
         max_length = max(lengths)
@@ -256,17 +386,19 @@ class MyModel(nn.Module):
             mask = torch.zeros(batch_size, max_length, dtype=torch.bool, device=self.device)
             for i in range(batch_size):
                 mask[i, :lengths[i]] = 1
-            loss = -self.crf(logits_batch, labels_batch, mask, reduction='mean')
+            L_ner = -self.crf(logits_batch, labels_batch, mask, reduction='mean')
             pred_ids = self.crf.decode(logits_batch, mask)
             pred = [[constants.ID_TO_LABEL[i] for i in ids] for ids in pred_ids]
         else:
-            loss = torch.zeros(1, device=self.device)
+            L_ner = torch.zeros(1, device=self.device)
             for logits, labels, length in zip(logits_batch, labels_batch, lengths):
-                loss += F.cross_entropy(logits[:length], labels[:length], reduction='sum')
-            loss /= batch_size
+                L_ner += F.cross_entropy(logits[:length], labels[:length], reduction='sum')
+            L_ner /= batch_size
             pred_ids = torch.argmax(logits_batch, dim=2).tolist()
             pred = [[constants.ID_TO_LABEL[i] for i in ids[:length]] for ids, length in zip(pred_ids, lengths)]
 
+        L_budget = F.relu(r_bar - self.r_budget)
+        loss = L_ner + self.a * L_itm + self.b * L_nce + self.lmbd * L_budget
         return loss, pred
 
     def itr_forward(self, pairs: List[MyPair]):

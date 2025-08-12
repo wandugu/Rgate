@@ -88,3 +88,21 @@ class MyCorpus:
         self.train: MyDataset = train
         self.dev: MyDataset = dev
         self.test: MyDataset = test
+
+
+def collate_fn(batch: List[MyPair]):
+    """构造批次并生成负样本索引与对比学习掩码。
+
+    原始 `DataLoader` 直接返回样本列表，此处在保持原有
+    `MyPair` 结构的基础上，额外生成:
+
+    - ``neg_idx``: 通过循环右移获得的负样本索引，避免与自身匹配。
+    - ``pair_mask``: 对角线为 ``True`` 的布尔矩阵，用于 InfoNCE。
+
+    这样模型在前向过程中即可根据索引取出错配图像，完成 ITM
+    与对比学习的构造。
+    """
+    batch_size = len(batch)
+    neg_idx = torch.roll(torch.arange(batch_size), shifts=1)
+    pair_mask = torch.eye(batch_size, dtype=torch.bool)
+    return {"pairs": batch, "neg_idx": neg_idx, "pair_mask": pair_mask}
