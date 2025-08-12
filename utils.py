@@ -46,7 +46,8 @@ def evaluate(model, loader):
     with torch.no_grad():
         for batch in tqdm(loader):
             _, pred = model.ner_forward(batch)
-            true_labels += [[constants.ID_TO_LABEL[token.label] for token in pair.sentence] for pair in batch]
+            pairs = batch["pairs"] if isinstance(batch, dict) else batch
+            true_labels += [[constants.ID_TO_LABEL[token.label] for token in pair.sentence] for pair in pairs]
             pred_labels += pred
 
     f1 = f1_score(true_labels, pred_labels, mode='strict', scheme=IOB2)
