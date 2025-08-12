@@ -11,6 +11,7 @@ from flair.data import Sentence as FlairSentence
 from torchcrf import CRF
 from data.dataset import MyDataPoint, MyPair
 import constants
+from model.fine_grained_gate import FineGrainedGate
 
 
 # constants for model
@@ -71,6 +72,7 @@ class MyModel(nn.Module):
         self.token_embedding = token_embedding
         self.proj = nn.Linear(hid_dim_v, hid_dim_t) if encoder_v else None
         self.aux_head = nn.Linear(hid_dim_t, 2)
+        self.fine_gate = FineGrainedGate(hid_dim_t) if (encoder_v and gate) else None
         if self.token_embedding:
             self.hid_dim_t += self.token_embedding.embedding_length
         if rnn:
@@ -129,15 +131,13 @@ class MyModel(nn.Module):
             gate=args.gate,
         )
 
-    def _bert_forward_with_image(self, inputs, pairs, gate_signal=None):
+    def _bert_forward_with_image(self, inputs, pairs):
         images = [pair.image for pair in pairs]
         textual_embeds = self.encoder_t.embeddings.word_embeddings(inputs.input_ids)
         visual_embeds = torch.stack([image.data for image in images]).to(self.device)
         if not use_cache(self.encoder_v, images):
             visual_embeds = resnet_encode(self.encoder_v, visual_embeds)
         visual_embeds = self.proj(visual_embeds)
-        if gate_signal is not None:
-            visual_embeds *= gate_signal
         inputs_embeds = torch.concat((textual_embeds, visual_embeds), dim=1)
 
         batch_size = visual_embeds.size()[0]
@@ -158,7 +158,7 @@ class MyModel(nn.Module):
             return_dict=True
         )
 
-    def ner_encode(self, pairs: List[MyPair], gate_signal=None):
+    def ner_encode(self, pairs: List[MyPair]):
         sentence_batch = [pair.sentence for pair in pairs]
         tokens_batch = [[token.text for token in sentence] for sentence in sentence_batch]
 
@@ -172,8 +172,22 @@ class MyModel(nn.Module):
             truncation=True
         ).to(self.device)
 
-        if self.encoder_v:
-            outputs = self._bert_forward_with_image(inputs, pairs, gate_signal)
+        if self.encoder_v and self.gate and self.fine_gate is not None:
+            text_outputs = self.encoder_t(
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                token_type_ids=inputs.token_type_ids,
+                return_dict=True
+            )
+            feat_batch = text_outputs.last_hidden_state
+            images = [pair.image for pair in pairs]
+            visual_embeds = torch.stack([image.data for image in images]).to(self.device)
+            if not use_cache(self.encoder_v, images):
+                visual_embeds = resnet_encode(self.encoder_v, visual_embeds)
+            visual_embeds = self.proj(visual_embeds)
+            feat_batch, _ = self.fine_gate(feat_batch, visual_embeds)
+        elif self.encoder_v:
+            outputs = self._bert_forward_with_image(inputs, pairs)
             feat_batch = outputs.last_hidden_state[:, :-VISUAL_LENGTH]
         else:
             outputs = self.encoder_t(
@@ -209,18 +223,7 @@ class MyModel(nn.Module):
                     token.feat = torch.cat((token.feat, flair_token.embedding))
 
     def ner_forward(self, pairs: List[MyPair]):
-        if self.gate:
-            tokens_batch = [[token.text for token in pair.sentence] for pair in pairs]
-            inputs = self.tokenizer(tokens_batch, is_split_into_words=True, padding=True, return_tensors='pt')
-            inputs = inputs.to(self.device)
-            outputs = self._bert_forward_with_image(inputs, pairs)
-            feats = outputs.last_hidden_state[:, CLS_POS]
-            logits = self.aux_head(feats)
-            gate_signal = F.softmax(logits, dim=1)[:, 1].view(len(pairs), 1, 1)
-        else:
-            gate_signal = None
-
-        self.ner_encode(pairs, gate_signal)
+        self.ner_encode(pairs)
 
         sentences = [pair.sentence for pair in pairs]
         batch_size = len(sentences)
