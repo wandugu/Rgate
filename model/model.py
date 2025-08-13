@@ -332,7 +332,8 @@ class MyModel(nn.Module):
             L_itm = F.binary_cross_entropy_with_logits(logits_itm, labels_itm)
 
             r_hat = torch.sigmoid(self.itm_head(cls_pos))
-            visual_gated = (r_hat.detach() if self.freeze_gate else r_hat) * visual_embeds
+            gating = r_hat.detach() if self.freeze_gate else r_hat
+            visual_gated = gating.unsqueeze(1) * visual_embeds
             outputs = self._bert_forward_with_visual(inputs, visual_gated)
             feat_batch = outputs.last_hidden_state[:, :inputs.input_ids.size(1)]
             r_bar = r_hat.mean()

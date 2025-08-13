@@ -57,5 +57,5 @@ to [this path](resources/models/embeddings).
 # BERT-BiLSTM-CRF
 python main.py --stacked --rnn --crf --dataset [dataset_id] --cuda [gpu_id]
 # RpBERT-BiLSTM-CRF
-python main.py --stacked --rnn --crf --encoder_v resnet101 --aux --gate --dataset [dataset_id] --cuda [gpu_id]
+python main.py --stacked --rnn --crf --encoder_v resnet101 --aux --gate --dataset twitter2017 --cuda [gpu_id]
 ```

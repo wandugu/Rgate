@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 from typing import List, Optional
 from pathlib import Path
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from torchvision import transforms
 
 
@@ -77,8 +77,13 @@ class MyDataset(Dataset):
                 return pair
 
             path_to_image = self.path_to_images / image.file_name
-            image.data = Image.open(path_to_image).convert('RGB')
-            image.data = self.transform(image.data)
+            try:
+                img = Image.open(path_to_image).convert('RGB')
+            except (FileNotFoundError, UnidentifiedImageError):
+                # 当图片缺失或损坏时，使用全零占位图像避免 DataLoader 崩溃
+                img = Image.new('RGB', (224, 224))
+
+            image.data = self.transform(img)
 
         return pair
 
