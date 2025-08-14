@@ -4,6 +4,9 @@ from torch import nn
 import torch.nn.functional as F
 import torchvision
 from transformers import PreTrainedTokenizer, PreTrainedModel, AutoTokenizer, AutoModel, AutoConfig
+import torchvision.transforms as T
+from PIL import Image
+import numpy as np
 import flair
 from flair.embeddings import WordEmbeddings, FlairEmbeddings, StackedEmbeddings, TokenEmbeddings
 from flair.data import Token as FlairToken
@@ -86,6 +89,14 @@ class MyModel(nn.Module):
             self.head = nn.Linear(self.hid_dim_t, constants.LABEL_SET_SIZE)
         self.crf = CRF(constants.LABEL_SET_SIZE, batch_first=True) if crf else None
         self.gate = gate
+        # 新增：视觉输入的标准预处理（与 ImageNet 预训练一致）
+        if self.encoder_v is not None:
+            self.image_preprocess = T.Compose([
+                T.Lambda(lambda im: im.convert("RGB") if hasattr(im, "convert") else im),
+                T.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
         self.to(device)
 
     @classmethod
@@ -94,7 +105,7 @@ class MyModel(nn.Module):
         models_path = 'model'
 
         encoder_t_path = f'{models_path}/transformers/{args.encoder_t}'
-        tokenizer = AutoTokenizer.from_pretrained(encoder_t_path)
+        tokenizer = AutoTokenizer.from_pretrained(encoder_t_path, use_fast=True)
         encoder_t = AutoModel.from_pretrained(encoder_t_path)
         config = AutoConfig.from_pretrained(encoder_t_path)
         hid_dim_t = config.hidden_size
@@ -134,9 +145,10 @@ class MyModel(nn.Module):
     def _bert_forward_with_image(self, inputs, pairs):
         images = [pair.image for pair in pairs]
         textual_embeds = self.encoder_t.embeddings.word_embeddings(inputs.input_ids)
-        visual_embeds = torch.stack([image.data for image in images]).to(self.device)
-        if not use_cache(self.encoder_v, images):
-            visual_embeds = resnet_encode(self.encoder_v, visual_embeds)
+
+        # 新增：统一图像为像素张量并编码为视觉序列
+        pixels = self._stack_image_batch(images)                 # [B,3,224,224]
+        visual_embeds = resnet_encode(self.encoder_v, pixels)    # [B, S, hid_dim_v]
         visual_embeds = self.proj(visual_embeds)
         inputs_embeds = torch.concat((textual_embeds, visual_embeds), dim=1)
 
@@ -157,6 +169,83 @@ class MyModel(nn.Module):
             token_type_ids=token_type_ids,
             return_dict=True
         )
+
+    def _stack_image_batch(self, images):
+        """
+        将一批图像统一为 [B,3,224,224] 的 float32 Tensor（已 ImageNet 规范化）。
+        支持输入为：
+          - 自定义对象（如 MyImage），其内部通过 .data 暴露真实图像
+          - PIL.Image.Image
+          - torch.Tensor（CHW/HWC 均可）
+          - numpy.ndarray（HWC）
+        """
+        def _norm_imagenet_chw(t: torch.Tensor) -> torch.Tensor:
+            # t: [3,H,W] float in [0,1]
+            if t.shape[0] == 1:
+                t = t.repeat(3, 1, 1)
+            mean = torch.tensor([0.485, 0.456, 0.406], device=t.device).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225], device=t.device).view(3, 1, 1)
+            return (t - mean) / std
+
+        tensors = []
+        for img in images:
+            base = img.data if hasattr(img, "data") else img  # 解包 MyImage 等自定义类型
+
+            # 分类型处理
+            if isinstance(base, Image.Image) or hasattr(base, "convert"):
+                # PIL 系：直接走预处理（包含 RGB、Resize、ToTensor、Normalize）
+                pil = base.convert("RGB") if hasattr(base, "convert") else base
+                t = self.image_preprocess(pil)  # [3,224,224] float 已归一化
+
+            elif isinstance(base, np.ndarray):
+                # numpy：假定 HWC，转 PIL 再走预处理
+                if base.ndim == 3 and base.shape[-1] in (1, 3):
+                    pil = Image.fromarray(base)
+                else:
+                    raise TypeError(f"Unsupported ndarray shape: {base.shape}")
+                t = self.image_preprocess(pil)  # [3,224,224]
+
+            elif isinstance(base, torch.Tensor):
+                # Tensor：统一成 CHW，归一化到 [0,1]，再插值到 224，最后做 ImageNet Normalize
+                t = base
+                # 去 batch 维
+                if t.ndim == 4 and t.size(0) == 1:
+                    t = t.squeeze(0)
+                # HWC -> CHW
+                if t.ndim == 3 and t.shape[-1] in (1, 3) and t.shape[0] not in (1, 3):
+                    t = t.permute(2, 0, 1)
+                if t.ndim != 3 or t.shape[0] not in (1, 3):
+                    raise TypeError(f"Unsupported tensor shape: {tuple(t.shape)}")
+
+                t = t.float()
+                # 归一化到 [0,1]
+                if t.max() > 1.0:
+                    t = t / 255.0
+                # 插值到目标尺寸
+                if t.shape[-2:] != (IMAGE_SIZE, IMAGE_SIZE):
+                    t = F.interpolate(
+                        t.unsqueeze(0), size=(IMAGE_SIZE, IMAGE_SIZE),
+                        mode="bilinear", align_corners=False
+                    ).squeeze(0)
+                # ImageNet 归一化
+                t = _norm_imagenet_chw(t)
+
+            else:
+                # 兜底：尝试常见的自定义持有
+                if hasattr(base, "to_pil"):
+                    t = self.image_preprocess(base.to_pil())
+                elif hasattr(base, "image") and hasattr(base.image, "convert"):
+                    t = self.image_preprocess(base.image)
+                else:
+                    raise TypeError(f"Unsupported image type: {type(base)}")
+
+            tensors.append(t)
+
+        batch = torch.stack(tensors, dim=0).to(self.device)  # [B,3,224,224]
+        return batch
+
+
+
 
     def ner_encode(self, pairs: List[MyPair]):
         sentence_batch = [pair.sentence for pair in pairs]
@@ -181,14 +270,15 @@ class MyModel(nn.Module):
             )
             feat_batch = text_outputs.last_hidden_state
             images = [pair.image for pair in pairs]
-            visual_embeds = torch.stack([image.data for image in images]).to(self.device)
-            if not use_cache(self.encoder_v, images):
-                visual_embeds = resnet_encode(self.encoder_v, visual_embeds)
-            visual_embeds = self.proj(visual_embeds)
+            pixels = self._stack_image_batch(images)                 # [B,3,224,224]
+            visual_embeds = resnet_encode(self.encoder_v, pixels)    # [B, S, hid_dim_v]
+            visual_embeds = self.proj(visual_embeds)                 # [B, S, hid_dim_t]
+
             feat_batch, _ = self.fine_gate(feat_batch, visual_embeds)
         elif self.encoder_v:
             outputs = self._bert_forward_with_image(inputs, pairs)
-            feat_batch = outputs.last_hidden_state[:, :-VISUAL_LENGTH]
+            # 用真实文本长度切回文本特征，避免依赖固定 VISUAL_LENGTH
+            feat_batch = outputs.last_hidden_state[:, :inputs.input_ids.size(1)]
         else:
             outputs = self.encoder_t(
                 input_ids=inputs.input_ids,

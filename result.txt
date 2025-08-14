@@ -1,0 +1,44 @@
+f1 score on dev set: 0.8579, f1 score on test set: 0.8634
+
+              precision    recall  f1-score   support
+
+         LOC     0.8191    0.8652    0.8415       178
+        MISC     0.6474    0.6433    0.6454       157
+         ORG     0.8486    0.8228    0.8355       395
+         PER     0.9329    0.9179    0.9253       621
+
+   micro avg     0.8595    0.8512    0.8553      1351
+   macro avg     0.8120    0.8123    0.8119      1351
+weighted avg     0.8601    0.8512    0.8555      1351
+
+改进版
+f1 score on dev set: 0.7651, f1 score on test set: 0.7759
+f1 score on dev set: 0.8225, f1 score on test set: 0.8259
+
+f1 score on dev set: 0.8540, f1 score on test set: 0.8597
+
+              precision    recall  f1-score   support
+
+         LOC     0.8000    0.8315    0.8154       178
+        MISC     0.7015    0.5987    0.6460       157
+         ORG     0.8677    0.8304    0.8486       395
+         PER     0.9296    0.9147    0.9221       621
+
+   micro avg     0.8700    0.8423    0.8560      1351
+   macro avg     0.8247    0.7938    0.8080      1351
+weighted avg     0.8679    0.8423    0.8545      1351
+
+
+之前
+f1 score on dev set: 0.8497, f1 score on test set: 0.8514
+
+              precision    recall  f1-score   support
+
+         LOC     0.8000    0.8539    0.8261       178
+        MISC     0.6897    0.6369    0.6623       157
+         ORG     0.8704    0.8329    0.8512       395
+         PER     0.9208    0.9179    0.9194       621
+
+   micro avg     0.8641    0.8520    0.8580      1351
+   macro avg     0.8202    0.8104    0.8147      1351
+weighted avg     0.8633    0.8520    0.8573      1351

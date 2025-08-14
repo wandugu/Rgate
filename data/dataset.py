@@ -4,7 +4,7 @@ from typing import List, Optional
 from pathlib import Path
 from PIL import Image
 from torchvision import transforms
-
+from PIL import Image, UnidentifiedImageError
 
 class MyDataPoint:
     def __init__(self):
@@ -77,9 +77,11 @@ class MyDataset(Dataset):
                 return pair
 
             path_to_image = self.path_to_images / image.file_name
-            image.data = Image.open(path_to_image).convert('RGB')
-            image.data = self.transform(image.data)
-
+            try:
+                image.data = Image.open(path_to_image).convert('RGB')
+            except (UnidentifiedImageError, OSError):
+                # 如果图片损坏或无法识别，使用全黑占位图避免抛出异常
+                image.data = Image.new("RGB", (224, 224))
         return pair
 
 
