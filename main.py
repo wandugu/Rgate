@@ -82,7 +82,8 @@ def main():
     print(args)
     dev_f1s, test_f1s = [], []
     ner_losses, itr_losses = [], []
-    best_dev_f1, best_test_report = 0, None
+    best_dev_f1, best_test_f1, best_test_report = 0, 0, None
+    best_total = best_correct = best_wrong = 0
     for epoch in range(1, args.num_epochs + 1):
         if args.aux:
             itr_loss = train(itr_train_loader, model, optimizer, task='itr', weight=0.05)
@@ -93,15 +94,23 @@ def main():
         ner_losses.append(ner_loss)
         print(f'loss of multimodal named entity recognition at epoch#{epoch}: {ner_loss:.2f}')
 
-        dev_f1, dev_report = evaluate(model, ner_dev_loader)
+        dev_f1, dev_report, _, _, _ = evaluate(model, ner_dev_loader)
         dev_f1s.append(dev_f1)
-        test_f1, test_report = evaluate(model, ner_test_loader)
+        test_f1, test_report, test_total, test_correct, test_wrong = evaluate(model, ner_test_loader)
         test_f1s.append(test_f1)
         print(f'f1 score on dev set: {dev_f1:.4f}, f1 score on test set: {test_f1:.4f}')
+        print(f'测试集共 {test_total} 个数据，预测正确 {test_correct} 个，预测错误 {test_wrong} 个')
         if dev_f1 > best_dev_f1:
             best_dev_f1 = dev_f1
+            best_test_f1 = test_f1
             best_test_report = test_report
+            best_total = test_total
+            best_correct = test_correct
+            best_wrong = test_wrong
 
+    print()
+    print(f'f1 score on dev set: {best_dev_f1:.4f}, f1 score on test set: {best_test_f1:.4f}')
+    print(f'测试集共 {best_total} 个数据，预测正确 {best_correct} 个，预测错误 {best_wrong} 个')
     print()
     print(best_test_report)
 
