@@ -50,7 +50,11 @@ def evaluate(model, loader):
             true_labels += [[constants.ID_TO_LABEL[token.label] for token in pair.sentence] for pair in pairs]
             pred_labels += pred
 
+    total = sum(len(seq) for seq in true_labels)
+    correct = sum(t == p for seq_t, seq_p in zip(true_labels, pred_labels) for t, p in zip(seq_t, seq_p))
+    wrong = total - correct
+
     f1 = f1_score(true_labels, pred_labels, mode='strict', scheme=IOB2)
     report = classification_report(true_labels, pred_labels, digits=4, mode='strict', scheme=IOB2)
 
-    return f1, report
+    return f1, report, total, correct, wrong
