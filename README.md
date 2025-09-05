@@ -58,4 +58,8 @@ to [this path](resources/models/embeddings).
 python main.py --stacked --rnn --crf --dataset [dataset_id] --cuda [gpu_id]
 # RpBERT-BiLSTM-CRF
 python main.py --stacked --rnn --crf --encoder_v resnet101 --aux --gate --dataset twitter2017 --cuda [gpu_id]
+# 保存最佳模型到 ./ckpt 并每3轮保存一次
+python main.py --encoder_v resnet101 --gate --save_interval 3
+# 直接加载已有模型评估测试集
+python main.py --load_model ckpt/best_model.pt
 ```
