@@ -32,7 +32,14 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--num_epochs', type=int, default=10)
     parser.add_argument('--optim', type=str, default='Adam', choices=['Adam', 'AdamW'])
+    parser.add_argument('--ckpt_dir', type=str, default='ckpt')
+    parser.add_argument('--save_interval', type=int, default=0,
+                        help='save model every n epochs, 0 to disable')
+    parser.add_argument('--load_model', type=str, default='',
+                        help='path to a saved model for evaluation')
     args = parser.parse_args()
+
+    os.makedirs(args.ckpt_dir, exist_ok=True)
 
     if (args.aux or args.gate) and args.encoder_v == '':
         raise ValueError('Invalid setting: auxiliary task or gate module must be used with visual encoder (i.e. ResNet)')
@@ -58,6 +65,16 @@ def main():
         itr_test_loader = DataLoader(itr_corpus.test, batch_size=args.bs, collate_fn=list, num_workers=args.num_workers)
 
     model = MyModel.from_pretrained(args)
+
+    if args.load_model:
+        state = torch.load(args.load_model, map_location=model.device)
+        model.load_state_dict(state)
+        test_f1, test_report, test_total, test_correct, test_wrong = evaluate(model, ner_test_loader)
+        print(f'f1 score on test set: {test_f1:.4f}')
+        print(f'测试集共 {test_total} 个数据，预测正确 {test_correct} 个，预测错误 {test_wrong} 个')
+        print()
+        print(test_report)
+        return
 
     params = [
         {'params': model.encoder_t.parameters(), 'lr': args.lr},
@@ -107,6 +124,10 @@ def main():
             best_total = test_total
             best_correct = test_correct
             best_wrong = test_wrong
+            torch.save(model.state_dict(), os.path.join(args.ckpt_dir, 'best_model.pt'))
+
+        if args.save_interval > 0 and epoch % args.save_interval == 0:
+            torch.save(model.state_dict(), os.path.join(args.ckpt_dir, f'epoch{epoch}.pt'))
 
     print()
     print(f'f1 score on dev set: {best_dev_f1:.4f}, f1 score on test set: {best_test_f1:.4f}')
