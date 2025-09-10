@@ -66,14 +66,31 @@ def main():
 
     model = MyModel.from_pretrained(args)
 
+    def save_result(mode, tokens, preds, trues):
+        result_dir = 'result'
+        os.makedirs(result_dir, exist_ok=True)
+        gt_path = os.path.join(result_dir, f'{mode}_groundtruth.json')
+        res_path = os.path.join(result_dir, f'{mode}_result.json')
+        with open(gt_path, 'w', encoding='utf-8') as f:
+            json.dump([
+                {'tokens': t, 'labels': l}
+                for t, l in zip(tokens, trues)
+            ], f, ensure_ascii=False, indent=4)
+        with open(res_path, 'w', encoding='utf-8') as f:
+            json.dump([
+                {'tokens': t, 'labels': l}
+                for t, l in zip(tokens, preds)
+            ], f, ensure_ascii=False, indent=4)
+
     if args.load_model:
         state = torch.load(args.load_model, map_location=model.device)
         model.load_state_dict(state)
-        test_f1, test_report, test_total, test_correct, test_wrong = evaluate(model, ner_test_loader)
+        test_f1, test_report, test_total, test_correct, test_wrong, tokens, preds, trues = evaluate(model, ner_test_loader, return_preds=True)
         print(f'f1 score on test set: {test_f1:.4f}')
         print(f'测试集共 {test_total} 个数据，预测正确 {test_correct} 个，预测错误 {test_wrong} 个')
         print()
         print(test_report)
+        save_result('test', tokens, preds, trues)
         return
 
     params = [
@@ -134,6 +151,9 @@ def main():
     print(f'测试集共 {best_total} 个数据，预测正确 {best_correct} 个，预测错误 {best_wrong} 个')
     print()
     print(best_test_report)
+
+    _, _, _, _, _, train_tokens, train_preds, train_trues = evaluate(model, ner_train_loader, return_preds=True)
+    save_result('train', train_tokens, train_preds, train_trues)
 
     results = {
         'config': vars(args),
