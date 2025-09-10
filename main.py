@@ -81,6 +81,13 @@ def main():
                 {'tokens': t, 'labels': l}
                 for t, l in zip(tokens, preds)
             ], f, ensure_ascii=False, indent=4)
+        if mode == 'train':
+            print(f'训练集文件输出至{gt_path}目录下')
+        elif mode == 'test':
+            print(f'测试集文件输出至{gt_path}目录下')
+        else:
+            print(f'{mode}集文件输出至{gt_path}目录下')
+        print(f'模型预测文件输出至{res_path}目录下')
 
     if args.load_model:
         state = torch.load(args.load_model, map_location=model.device)
