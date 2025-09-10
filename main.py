@@ -81,6 +81,9 @@ def main():
                 {'tokens': t, 'labels': l}
                 for t, l in zip(tokens, preds)
             ], f, ensure_ascii=False, indent=4)
+        set_name = '训练/验证集' if mode == 'train' else '测试集'
+        print(f'{set_name}文件输出至{result_dir}目录下{os.path.basename(gt_path)}文件')
+        print(f'模型预测文件输出至{result_dir}目录下{os.path.basename(res_path)}文件')
 
     if args.load_model:
         state = torch.load(args.load_model, map_location=model.device)
@@ -152,7 +155,8 @@ def main():
     print()
     print(best_test_report)
 
-    _, _, _, _, _, train_tokens, train_preds, train_trues = evaluate(model, ner_train_loader, return_preds=True)
+    train_eval_loader = DataLoader(ner_corpus.train, batch_size=args.bs, collate_fn=collate_fn, num_workers=args.num_workers)
+    _, _, _, _, _, train_tokens, train_preds, train_trues = evaluate(model, train_eval_loader, return_preds=True)
     save_result('train', train_tokens, train_preds, train_trues)
 
     results = {
