@@ -1,10 +1,13 @@
 import os
 import random
+from collections import defaultdict
+
 import numpy as np
 import torch
 import constants
 from tqdm import tqdm
 from seqeval.metrics import classification_report, f1_score
+from seqeval.metrics.sequence_labeling import get_entities
 from seqeval.scheme import IOB2
 
 
@@ -60,10 +63,34 @@ def evaluate(model, loader, return_preds: bool = False):
     )
     wrong = total - correct
 
+    entity_correct_counts = defaultdict(int)
+    entity_total_counts = defaultdict(int)
+
+    for seq_t, seq_p in zip(true_labels, pred_labels):
+        true_entities = set(get_entities(seq_t))
+        pred_entities = set(get_entities(seq_p))
+
+        for entity in true_entities:
+            entity_total_counts[entity[0]] += 1
+
+        for entity in true_entities & pred_entities:
+            entity_correct_counts[entity[0]] += 1
+
     f1 = f1_score(true_labels, pred_labels, mode='strict', scheme=IOB2)
     report = classification_report(true_labels, pred_labels, digits=4, mode='strict', scheme=IOB2)
 
     if return_preds:
-        return f1, report, total, correct, wrong, tokens, pred_labels, true_labels
+        return (
+            f1,
+            report,
+            total,
+            correct,
+            wrong,
+            dict(entity_correct_counts),
+            dict(entity_total_counts),
+            tokens,
+            pred_labels,
+            true_labels,
+        )
 
-    return f1, report, total, correct, wrong
+    return f1, report, total, correct, wrong, dict(entity_correct_counts), dict(entity_total_counts)
