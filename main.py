@@ -41,6 +41,23 @@ def print_entity_statistics(entity_correct_counts, entity_total_counts):
         else:
             print(f'实体类别 {entity_type} Accuracy= 无测试样本')
 
+    total_correct_values = [entity_correct_counts.get(entity_type, 0) for entity_type in entity_types]
+    total_total_values = [entity_total_counts.get(entity_type, 0) for entity_type in entity_types]
+    total_correct_sum = sum(total_correct_values)
+    total_total_sum = sum(total_total_values)
+
+    if total_total_sum > 0:
+        correct_expr = '+'.join(str(value) for value in total_correct_values)
+        total_expr = '+'.join(str(value) for value in total_total_values)
+        overall_accuracy = total_correct_sum / total_total_sum
+        print(
+            f'实体判断Accuracy的打印 = '
+            f'{{成功{{{correct_expr}={total_correct_sum}}}}}/'
+            f'{{总数{total_expr}={total_total_sum}}} = {overall_accuracy:.4f}'
+        )
+    else:
+        print('实体判断Accuracy的打印 = 无测试样本')
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=0)
