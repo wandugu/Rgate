@@ -1,6 +1,6 @@
-# RpBERT
-This is a implementation of the paper 
-[RpBERT: A Text-image Relation Propagation-based BERT Model for Multimodal NER](https://ojs.aaai.org/index.php/AAAI/article/view/17633).
+# RGate-MNER: RL-Calibrated Relation Gating for Multimodal NER
+This is an implementation of the paper
+[RGate-MNER: RL-Calibrated Relation Gating for Multimodal NER](https://ojs.aaai.org/index.php/AAAI/article/view/17633).
 
 ## Requirements
 
@@ -56,7 +56,7 @@ to [this path](resources/models/embeddings).
 ```shell script
 # BERT-BiLSTM-CRF
 python main.py --stacked --rnn --crf --dataset [dataset_id] --cuda [gpu_id]
-# RpBERT-BiLSTM-CRF
+# RGate-MNER-BiLSTM-CRF
 python main.py --stacked --rnn --crf --encoder_v resnet101 --aux --gate --dataset twitter2017 --cuda [gpu_id]
 # 保存最佳模型到 ./ckpt 并每3轮保存一次
 python main.py --encoder_v resnet101 --gate --save_interval 3
