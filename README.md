@@ -1,6 +1,6 @@
 # RGate-MNER: RL-Calibrated Relation Gating for Multimodal NER
 This is an implementation of the paper
-[RGate-MNER: RL-Calibrated Relation Gating for Multimodal NER](https://ojs.aaai.org/index.php/AAAI/article/view/17633).
+[RGate-MNER: RL-Calibrated Relation Gating for Multimodal NER].
 
 ## Requirements
 
