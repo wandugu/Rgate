@@ -1,0 +1,5 @@
+logging:
+  name: rgate
+  level: DEBUG
+  format: "| %(levelname)s | %(name)s | %(message)s"
+  sample_template: "测试样本 {index}/{total}\n输入={input}\n正确答案={true}\n模型预测={pred}"
