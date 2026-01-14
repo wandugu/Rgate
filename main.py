@@ -148,7 +148,7 @@ def main():
             tokens,
             preds,
             trues,
-        ) = evaluate(model, ner_test_loader, return_preds=True)
+        ) = evaluate(model, ner_test_loader, return_preds=True, log_samples=True)
         print(f'f1 score on test set: {test_f1:.4f}')
         print(f'测试集共 {test_total} 个 token，预测正确 {test_correct} 个，预测错误 {test_wrong} 个')
         print(f'Token Accuracy: {test_correct}/{test_total} = {test_correct / test_total:.15f}')

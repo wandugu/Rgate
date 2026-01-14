@@ -9,6 +9,7 @@ from tqdm import tqdm
 from seqeval.metrics import classification_report, f1_score
 from seqeval.metrics.sequence_labeling import get_entities
 from seqeval.scheme import IOB2
+from config_utils import get_logger, get_logging_config
 
 
 def seed_worker(worker_id):
@@ -28,32 +29,65 @@ def seed_everything(seed):
 
 def train(loader, model, optimizer, task, weight=1.0):
     losses = []
+    logger = get_logger()
 
     model.train()
-    for batch in tqdm(loader):
+    logger.debug("开始训练任务=%s", task)
+    for batch_index, batch in enumerate(tqdm(loader), start=1):
         optimizer.zero_grad()
         loss, _ = getattr(model, f'{task}_forward')(batch)
         loss *= weight
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
+        logger.debug("训练任务=%s, batch=%s, loss=%.6f", task, batch_index, loss.item())
 
+    logger.debug("训练任务=%s完成, 平均loss=%.6f", task, np.mean(losses))
     return np.mean(losses)
 
 
-def evaluate(model, loader, return_preds: bool = False):
+def log_prediction_samples(tokens, true_labels, pred_labels, total_samples=None):
+    logger = get_logger()
+    logging_config = get_logging_config()
+    sample_template = logging_config["sample_template"]
+    if total_samples is None:
+        total_samples = len(tokens)
+    for index, (token_list, true_label, pred_label) in enumerate(
+        zip(tokens, true_labels, pred_labels),
+        start=1,
+    ):
+        input_text = " ".join(token_list)
+        message = sample_template.format(
+            index=index,
+            total=total_samples,
+            input=input_text,
+            true=true_label,
+            pred=pred_label,
+        )
+        logger.info(message)
+
+
+def evaluate(model, loader, return_preds: bool = False, log_samples: bool = False):
     true_labels = []
     pred_labels = []
     tokens = []
+    logger = get_logger()
+    total_samples = len(loader.dataset) if hasattr(loader, "dataset") else None
 
     model.eval()
     with torch.no_grad():
-        for batch in tqdm(loader):
+        logger.debug("开始评估, 预估样本数=%s", total_samples)
+        for batch_index, batch in enumerate(tqdm(loader), start=1):
             _, pred = model.ner_forward(batch)
             pairs = batch["pairs"] if isinstance(batch, dict) else batch
             tokens += [[token.text for token in pair.sentence] for pair in pairs]
             true_labels += [[constants.ID_TO_LABEL[token.label] for token in pair.sentence] for pair in pairs]
             pred_labels += pred
+            logger.debug(
+                "评估batch=%s, batch_size=%s",
+                batch_index,
+                len(pairs),
+            )
 
     total = sum(len(seq) for seq in true_labels)
     correct = sum(
@@ -78,6 +112,16 @@ def evaluate(model, loader, return_preds: bool = False):
 
     f1 = f1_score(true_labels, pred_labels, mode='strict', scheme=IOB2)
     report = classification_report(true_labels, pred_labels, digits=4, mode='strict', scheme=IOB2)
+    logger.debug(
+        "评估完成: f1=%.6f, total=%s, correct=%s, wrong=%s",
+        f1,
+        total,
+        correct,
+        wrong,
+    )
+
+    if log_samples:
+        log_prediction_samples(tokens, true_labels, pred_labels, total_samples=total_samples)
 
     if return_preds:
         return (
