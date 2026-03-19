@@ -134,3 +134,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+ckpt/
+log/
+nohup.out
+result/
