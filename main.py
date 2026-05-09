@@ -66,7 +66,8 @@ def main():
     parser.add_argument('--dataset', type=str, default='twitter2017', choices=['twitter2015', 'twitter2017'])
     parser.add_argument('--encoder_t', type=str, default='bert-base-uncased',
                         choices=['bert-base-uncased', 'bert-large-uncased'])
-    parser.add_argument('--encoder_v', type=str, default='', choices=['', 'resnet101', 'resnet152'])
+    parser.add_argument('--encoder_v', type=str, default='resnet152', choices=['', 'resnet101', 'resnet152'],
+                        help='visual encoder, default follows RGate v7; pass --encoder_v resnet101 to override')
     parser.add_argument('--stacked', action='store_true', default=False)
     parser.add_argument('--rnn',   action='store_true',  default=False)
     parser.add_argument('--crf',   action='store_true',  default=False)
@@ -82,6 +83,38 @@ def main():
                         help='save model every n epochs, 0 to disable')
     parser.add_argument('--load_model', type=str, default='',
                         help='path to a saved model for evaluation')
+    parser.add_argument('--rgate_stage', type=int, default=3, choices=[1, 2, 3],
+                        help='RGate training stage: 1 text-only, 2 deterministic soft fusion, 3 stochastic relation gate')
+    parser.add_argument('--stage1_epochs', type=int, default=0,
+                        help='number of initial text-only warmup epochs when --gate is enabled')
+    parser.add_argument('--stage2_epochs', type=int, default=0,
+                        help='number of deterministic soft-fusion epochs after warmup when --gate is enabled')
+    parser.add_argument('--theta0', type=float, default=0.5,
+                        help='early acquisition gate inference threshold')
+    parser.add_argument('--theta1', type=float, default=0.5,
+                        help='relation gate inference threshold')
+    parser.add_argument('--use_delta', type=float, default=0.0,
+                        help='Delta-NLL threshold for early-gate usefulness supervision')
+    parser.add_argument('--budget_tau', type=float, default=0.4,
+                        help='target early-gate activation rate')
+    parser.add_argument('--alpha_itm', type=float, default=1.0,
+                        help='pseudo-ITM loss weight')
+    parser.add_argument('--beta_nce', type=float, default=0.5,
+                        help='pair-level bi-InfoNCE loss weight')
+    parser.add_argument('--mu_use', type=float, default=1.0,
+                        help='early-gate usefulness loss weight')
+    parser.add_argument('--lambda_budget', type=float, default=0.2,
+                        help='early-gate budget loss weight')
+    parser.add_argument('--lambda_cost', type=float, default=0.05,
+                        help='residual fusion cost penalty in relation-gate reward')
+    parser.add_argument('--fuse_cost', type=float, default=1.0,
+                        help='normalized residual fusion/injection cost used by policy-gradient reward')
+    parser.add_argument('--eta_rl', type=float, default=1.0,
+                        help='policy-gradient loss scale')
+    parser.add_argument('--beta_kl', type=float, default=0.01,
+                        help='KL regularization weight against the EMA relation gate')
+    parser.add_argument('--ema_decay', type=float, default=0.99,
+                        help='EMA decay for the relation-gate anchor')
     args = parser.parse_args()
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -163,18 +196,29 @@ def main():
         {'params': model.encoder_t.parameters(), 'lr': args.lr},
         {'params': model.head.parameters(), 'lr': args.lr * 100},
     ]
+
+    def add_module_params(module, lr):
+        if module is not None:
+            params.append({'params': module.parameters(), 'lr': lr})
+
     if args.encoder_v:
-        params.append({'params': model.encoder_v.parameters(), 'lr': args.lr})
-        params.append({'params': model.proj.parameters(), 'lr': args.lr * 100})
-        params.append({'params': model.txt_proj.parameters(), 'lr': args.lr * 100})
-        params.append({'params': model.img_proj.parameters(), 'lr': args.lr * 100})
-        params.append({'params': model.itm_head.parameters(), 'lr': args.lr * 100})
-        params.append({'params': [model.logit_scale], 'lr': args.lr * 100})
+        add_module_params(model.encoder_v, args.lr)
+        add_module_params(model.proj, args.lr * 100)
+        add_module_params(model.fusion, args.lr * 100)
+        add_module_params(model.preview_encoder, args.lr)
+        add_module_params(model.preview_proj, args.lr * 100)
+        add_module_params(model.pair_proj, args.lr * 100)
+        add_module_params(model.early_gate, args.lr * 100)
+        add_module_params(model.relation_gate, args.lr * 100)
+        add_module_params(model.itm_head, args.lr * 100)
+        add_module_params(model.nce_head, args.lr * 100)
+        if model.logit_scale is not None:
+            params.append({'params': [model.logit_scale], 'lr': args.lr * 100})
     if args.rnn:
         params.append({'params': model.rnn.parameters(), 'lr': args.lr * 100})
     if args.crf:
         params.append({'params': model.crf.parameters(), 'lr': args.lr * 100})
-    if args.gate:
+    if args.aux:
         params.append({'params': model.aux_head.parameters(), 'lr': args.lr * 100})
 
     optimizer = getattr(torch.optim, args.optim)(params)
@@ -187,6 +231,15 @@ def main():
     best_entity_correct = {}
     best_entity_total = {}
     for epoch in range(1, args.num_epochs + 1):
+        if args.gate and args.encoder_v:
+            if epoch <= args.stage1_epochs:
+                model.set_rgate_stage(1)
+            elif epoch <= args.stage1_epochs + args.stage2_epochs:
+                model.set_rgate_stage(2)
+            else:
+                model.set_rgate_stage(args.rgate_stage)
+            print(f'RGate training stage at epoch#{epoch}: {model.rgate_stage}')
+
         if args.aux:
             itr_loss = train(itr_train_loader, model, optimizer, task='itr', weight=0.05)
             itr_losses.append(itr_loss)

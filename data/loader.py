@@ -52,6 +52,7 @@ def load_ner_dataset(path_to_txt: Path, path_to_images: Path, load_image: bool =
                 image_id = line[len(IMGID_PREFIX):]
             elif line != '':
                 text, label = line.split('\t')
+                label = label.replace('-OTHER', '-MISC')
                 if text == '' or text.isspace() \
                         or text in SPECIAL_TOKENS \
                         or text.startswith(URL_PREFIX):
@@ -89,10 +90,10 @@ def type_count(dataset: MyDataset) -> str:
     counter = Counter(tags)
 
     num_total = len(dataset)
-    num_per = counter['B-PER']
-    num_loc = counter['B-LOC']
-    num_org = counter['B-ORG']
-    num_misc = counter['B-MISC']
+    num_per = counter[constants.LABEL_TO_ID['B-PER']]
+    num_loc = counter[constants.LABEL_TO_ID['B-LOC']]
+    num_org = counter[constants.LABEL_TO_ID['B-ORG']]
+    num_misc = counter[constants.LABEL_TO_ID['B-MISC']]
 
     return f'{num_total}\t{num_per}\t{num_loc}\t{num_org}\t{num_misc}'
 
@@ -107,7 +108,7 @@ def token_count(dataset: MyDataset) -> str:
 
 
 if __name__ == "__main__":
-    twitter2015 = load_ner_corpus('datasets/twitter2015')
+    twitter2015 = load_ner_corpus('datasets/twitter2015', load_image=False)
     twitter2015_train_statistic = type_count(twitter2015.train)
     twitter2015_dev_statistic = type_count(twitter2015.dev)
     twitter2015_test_statistic = type_count(twitter2015.test)
@@ -125,7 +126,7 @@ if __name__ == "__main__":
 
     print()
 
-    twitter2017 = load_ner_corpus('datasets/twitter2017')
+    twitter2017 = load_ner_corpus('datasets/twitter2017', load_image=False)
     twitter2017_train_statistic = token_count(twitter2017.train)
     twitter2017_dev_statistic = token_count(twitter2017.dev)
     twitter2017_test_statistic = token_count(twitter2017.test)

@@ -31,9 +31,10 @@ Run [loader.py](data/loader.py) to make sure the statistics is identical as
 | Testing     | 1459  | 23051 |
 
 ### Models
-* Download pre-trained ResNet-101 weights
-from [here](https://download.pytorch.org/models/resnet101-63fe2227.pth)
-to [this path](resources/models/cnn/resnet101.pth).
+* Download pre-trained ResNet-152 weights
+from [here](https://download.pytorch.org/models/resnet152-394f9c45.pth)
+to [this path](model/cnn/resnet152.pth). ResNet-101 remains supported as an override by
+placing `resnet101.pth` in `model/cnn/` and passing `--encoder_v resnet101`.
 * Download pre-trained BERT-Base weights 
 from [here](https://huggingface.co/bert-base-uncased/tree/main)
 to [this path](resources/models/transformers/bert-base-uncased).
@@ -55,11 +56,13 @@ to [this path](resources/models/embeddings).
 
 ```shell script
 # BERT-BiLSTM-CRF
-python main.py --stacked --rnn --crf --dataset [dataset_id] --cuda [gpu_id]
-# RGate-MNER-BiLSTM-CRF
-python main.py --stacked --rnn --crf --encoder_v resnet101 --aux --gate --dataset twitter2017 --cuda [gpu_id]
-# 保存最佳模型到 ./ckpt 并每3轮保存一次
+python main.py --encoder_v "" --stacked --rnn --crf --dataset [dataset_id] --cuda [gpu_id]
+# RGate-MNER-BiLSTM-CRF (defaults to ResNet-152)
+python main.py --stacked --rnn --crf --aux --gate --dataset twitter2017 --cuda [gpu_id]
+# Override with ResNet-101
 python main.py --encoder_v resnet101 --gate --save_interval 3
+# 保存最佳模型到 ./ckpt 并每3轮保存一次
+python main.py --gate --save_interval 3
 # 直接加载已有模型评估测试集
 python main.py --load_model ckpt/best_model.pt
 ```

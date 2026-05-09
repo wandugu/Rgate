@@ -3,7 +3,6 @@ from torch.utils.data import Dataset
 from typing import List, Optional
 from pathlib import Path
 from PIL import Image, UnidentifiedImageError
-from torchvision import transforms
 
 
 class MyDataPoint:
@@ -58,11 +57,9 @@ class MyDataset(Dataset):
         self.pairs: List[MyPair] = pairs
         self.path_to_images = path_to_images
         self.load_image = load_image
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
+        self.image_size = (224, 224)
+        self.image_mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        self.image_std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 
     def __len__(self):
         return len(self.pairs)
@@ -83,9 +80,16 @@ class MyDataset(Dataset):
                 # 当图片缺失或损坏时，使用全零占位图像避免 DataLoader 崩溃
                 img = Image.new('RGB', (224, 224))
 
-            image.data = self.transform(img)
+            image.data = self.transform_image(img)
 
         return pair
+
+    def transform_image(self, img: Image.Image) -> torch.Tensor:
+        resample = Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR
+        img = img.resize(self.image_size, resample=resample)
+        data = torch.frombuffer(bytearray(img.tobytes()), dtype=torch.uint8)
+        data = data.view(img.size[1], img.size[0], 3).permute(2, 0, 1).float().div(255.0)
+        return (data - self.image_mean) / self.image_std
 
 
 class MyCorpus:

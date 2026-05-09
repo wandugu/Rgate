@@ -39,6 +39,8 @@ def train(loader, model, optimizer, task, weight=1.0):
         loss *= weight
         loss.backward()
         optimizer.step()
+        if hasattr(model, "update_ema"):
+            model.update_ema()
         losses.append(loss.item())
         logger.debug("训练任务=%s, batch=%s, loss=%.6f", task, batch_index, loss.item())
 
