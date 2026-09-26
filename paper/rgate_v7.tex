@@ -1,0 +1,355 @@
+\documentclass{llncs}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{bbding}
+\usepackage{xcolor}
+\usepackage{placeins}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{multirow}
+\usepackage{xurl}
+\usepackage[hidelinks]{hyperref}
+
+% ---- 自定义符号与缩写（把你文中出现的都定义上）----
+\newcommand{\Litm}{\mathcal{L}_{\mathrm{ITM}}}
+\newcommand{\Lnce}{\mathcal{L}_{\mathrm{NCE}}}
+\newcommand{\Luse}{\mathcal{L}_{\mathrm{USE}}} % usefulness / early-gate supervision
+\newcommand{\Lner}{\mathcal{L}_{\mathrm{NER}}}
+\newcommand{\Lbudget}{\mathcal{L}_{\mathrm{budget}}}
+\newcommand{\Lrl}{\mathcal{L}_{\mathrm{rl}}}
+\newcommand{\Ltotal}{\mathcal{L}_{\mathrm{total}}}
+\newcommand{\CE}{\mathrm{CE}}
+\newcommand{\BCE}{\mathrm{BCE}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Bern}{\mathrm{Bernoulli}}
+\DeclareMathOperator*{\LSE}{LSE} % log-sum-exp
+\DeclareMathOperator*{\Ent}{H}   % entropy
+\urlstyle{rm}
+\DeclareRobustCommand{\corrmark}{\textsuperscript{\normalfont\scriptsize\Envelope}}
+
+\begin{document}
+\pagestyle{empty}
+
+\title{RGate-MNER: Budgeted Coarse-to-Fine Visual Evidence Gating for Multimodal Named Entity Recognition}
+% === author start ===
+\author{
+Miaobo Hu\inst{1,2}\orcidID{0000-0002-6417-3280} \and
+Bokun Wang\inst{1,2}\orcidID{0009-0007-5519-6222} \and
+Shuhao Hu\inst{1,2}\orcidID{0009-0008-0501-8652} \and
+Ruohan Wang\inst{1,2}\orcidID{0009-0000-9495-0389} \and
+Xin Wang\inst{1}\orcidID{0000-0002-1069-4830} \and
+Xiaobo Guo\inst{1}\corrmark\orcidID{0009-0007-2672-6650} \and
+Daren Zha\inst{1}\orcidID{0009-0002-6042-3454} \and
+Jun Xiao\inst{3}\orcidID{0000-0002-1799-3948}
+}
+\institute{
+Institute of Information Engineering, Chinese Academy of Sciences, Beijing 100092, China
+\email{\{humiaobo,wangbokun,hushuhao,wangruohan\}@iie.ac.cn}\\
+\email{wangxin@iie.ac.cn, guoxiaobo@iie.ac.cn, zhadaren@iie.ac.cn}
+\and
+School of Cyber Security, University of Chinese Academy of Sciences, Beijing 100049, China
+\and
+School of Artificial Intelligence, University of Chinese Academy of Sciences, Beijing 100049, China
+\email{xiaojun@ucas.ac.cn}
+}
+
+% === author end ===
+
+\maketitle
+\thispagestyle{empty}
+
+
+\begin{abstract}
+Social-media multimodal named entity recognition (MNER) is challenged by weak or misleading image--text relations and by the cost of always running a visual backbone. We propose \textbf{RGate-MNER}, a budgeted coarse-to-fine gating framework that separates visual usage into an early \emph{acquisition} gate and a post-encoding \emph{relation} gate. The early gate uses text features, a lightweight visual preview, and text-only uncertainty to decide whether full visual encoding is worthwhile; the relation gate then controls binary back-off and continuous visual weighting. The gates are trained with stage-matched signals, including usefulness supervision, pseudo image--text matching, pair-level bi-InfoNCE, and policy-gradient optimization for discrete back-off under residual fusion cost. This yields a two-threshold inference rule $(\theta_0,\theta_1)$ for accuracy, coverage, and cost control. Experiments on Twitter-2015/2017 show consistent gains over controlled text-only and always-on multimodal baselines, stronger robustness under weak or noisy images, and explicit inference-time cost trade-offs. The code is available at \url{https://github.com/wandugu/paper_rgate}.
+
+\keywords{Multimodal Named Entity Recognition \and Relation Gating \and Reinforcement Learning \and Budget-Aware Selective Fusion}
+
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Multimodal named entity recognition (MNER) identifies entity spans and types in a post by using both text and its accompanying image. Although images can disambiguate visually grounded mentions, social-media images are often weakly related, partially relevant, or unrelated to the text~\cite{huang_mner-mi_2024,li_llms_2024}. This creates two practical failure modes: unconditional fusion may inject misleading visual evidence, and always-on multimodal models still pay the full visual-encoding cost even when the image is unhelpful~\cite{chen_can_2021,sun_rpbert_2021}. MNER therefore needs an adaptive mechanism that decides when visual evidence should be acquired and when it should be trusted.
+
+Existing MNER models mainly strengthen cross-modal interaction after visual features have already been extracted~\cite{chen_can_2021,sun_rpbert_2021,xu_enhancing_2025,xu_effective_2024}. Such post-encoding designs can reduce some noisy visual influence but cannot avoid the dominant cost of the visual backbone. They also conflate two decisions with different observability: a cheap pre-encoding decision about whether an example is worth visual computation, and a richer post-encoding decision about whether the encoded visual evidence should affect prediction.
+
+We propose \textbf{RGate-MNER}, a budgeted coarse-to-fine gating framework. A lightweight early gate predicts visual acquisition from text, preview, and uncertainty signals; activated examples then run the full visual encoder, and a relation gate decides binary back-off and continuous visual weighting. The two gates are trained with stage-specific supervision: usefulness targets for early activation, pseudo-ITM and pair-level bi-InfoNCE for relation calibration, and a Bernoulli policy-gradient objective that optimizes task gain minus residual fusion cost.
+
+\noindent\textbf{Contributions.}
+(i) We formulate social-media MNER as a budgeted selective-fusion problem under asymmetric observability and separate visual usage into acquisition and trust decisions.
+(ii) We propose \textbf{RGate-MNER}, a coarse-to-fine gating framework with a two-threshold inference rule $(\theta_0,\theta_1)$ for accuracy, coverage, and cost control.
+(iii) We validate the framework on in-domain, cross-dataset, noisy-image, ablation, calibration, and measured-cost evaluations.
+
+\section{Related Work}
+\label{sec:related}
+
+\noindent\textbf{Multimodal NER under weak image--text correlation.}
+Early MNER systems inject visual features into text encoders to disambiguate visually grounded mentions~\cite{lu_visual_2018,yu_improving_2020,zhang_adaptive_2018,zhao_learning_2022}. Recent work shows that social-media image--text pairs are often weakly aligned or misleading~\cite{huang_mner-mi_2024,li_llms_2024,xu_enhancing_2025,xu_effective_2024}, motivating adaptive visual evidence use rather than unconditional fusion.
+
+\noindent\textbf{Selective computation.}
+Relevance-aware MNER methods mainly address how much encoded visual evidence should influence prediction~\cite{chen_can_2021,sun_rpbert_2021,xu_effective_2024}. Efficient vision--language models reduce cost through dynamic computation or token sparsification~\cite{huang_dynamic-llava_2024,zhang_sparsevlm_2025}. Our setting targets whether to execute the full visual branch at all; we therefore separate cheap acquisition from post-encoding trust and calibrate the latter with pseudo-ITM, contrastive learning~\cite{oord_representation_2019}, and RL-based back-off.
+
+\section{Method}
+
+\subsection{Overview and Two-Stage Gating}\label{sec:arch}
+Fig.~\ref{fig:arch} summarizes the proposed two-stage routing pipeline. Given text $x_t$ and image $x_i$, the text encoder outputs word-level states $H_t\in\mathbb{R}^{T\times D}$ and pooled vector $c_t$, while a low-cost preview encoder outputs $c_i^g$. The early acquisition gate predicts
+\begin{equation}
+p_0=\sigma\!\big(f_{\mathrm{early}}([c_t;c_i^g;u_t])\big),
+\end{equation}
+where $u_t$ is a text-only uncertainty statistic. If $p_0<\theta_0$, inference exits to the text-only path and skips the full visual encoder. Otherwise, the full visual backbone produces visual tokens $V\in\mathbb{R}^{M\times D}$ and pooled vector $c_i$, from which we compute
+\begin{equation}
+c_{ti}=f_{\mathrm{pair}}\!\big([c_t;c_i;c_t\odot c_i;|c_t-c_i|]\big),\qquad
+p_1=\sigma\!\big(f_{\mathrm{gate}}([c_{ti};u_t])\big).
+\end{equation}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=.95\linewidth]{pic/rgate-alg.jpg}
+  \caption{RGate-MNER architecture. The early gate $p_0$ controls image acquisition; the relation gate $p_1$ controls post-encoding back-off and visual weighting.}
+  \label{fig:arch}
+\end{figure}
+
+At inference, the selected representation is
+\begin{equation}
+\hat H_t=
+\begin{cases}
+H_t, & p_0<\theta_0,\\
+H_t, & p_0\ge\theta_0 \text{ and } p_1<\theta_1,\\
+F_{\mathrm{fuse}}(H_t,\,p_1V), & p_0\ge\theta_0 \text{ and } p_1\ge\theta_1.
+\end{cases}
+\end{equation}
+Thus $p_0$ controls the dominant image-encoding cost, while $p_1$ is evaluated only on activated examples and controls both binary back-off $\mathbb{I}[p_1\ge\theta_1]$ and continuous weighting $p_1V$. During Stages II/III training, full visual features are computed for all samples to construct pseudo negatives, usefulness targets, and RL rewards; conditional execution is applied only at inference.
+
+\subsection{Encoders and Fusion}\label{sec:enc}
+We encode text with BERT-base-uncased~\cite{devlin_bert_2019}. From subword states $\tilde H_t$ and the pooled \texttt{[CLS]} vector $c_t$, we keep the first subword of each word to obtain $H_t$. A text-only diagnostic head produces token distributions $\pi_j$, and the average entropy
+\begin{equation}
+u_t=\frac{1}{T}\sum_{j=1}^{T}\Ent(\pi_j)
+\end{equation}
+serves as a task-aware uncertainty signal for both gates.
+
+For images, the preview branch produces $c_i^g=\mathrm{Pool}(\mathrm{Proj}_{g}(E_v^g(\mathrm{Resize}(x_i))))$. The full visual backbone $E_v$ is ResNet-152~\cite{he_deep_2016}; its features are flattened, projected to $D$ dimensions, and pooled as
+\begin{equation}
+V=\mathrm{Proj}(E_v(x_i)),\qquad c_i=\mathrm{Pool}(V).
+\end{equation}
+When visual injection is activated, $F_{\mathrm{fuse}}(\cdot)$ is implemented as a lightweight cross-attention module in which textual states attend to visual tokens. The always-on Naive-MM baseline uses the same text encoder, visual backbone, fusion block, and decoder, so differences come from adaptive invocation rather than model capacity.
+
+\subsection{Training Objectives}\label{sec:train}
+Within a mini-batch, shuffled images form pseudo mismatches $(x_t^b,x_i^{\pi(b)})$. The early gate is trained from the gain of deterministic soft fusion:
+\begin{align}
+\Delta \mathrm{NLL}^b&=\mathrm{NLL}_{\mathrm{text}}^b-\mathrm{NLL}_{\mathrm{mm}}^{\mathrm{soft},b},\\
+y_{\mathrm{use}}^b&=\mathbb{I}[\Delta \mathrm{NLL}^b>\delta],\qquad
+\Luse=\tfrac{1}{B}\sum_b\BCE(p_0^b,y_{\mathrm{use}}^b).
+\end{align}
+Relation-aware pair features are formed by
+\begin{equation}
+c_{ti}^{b,b'}=f_{\mathrm{pair}}\!\big([c_t^b;c_i^{b'};c_t^b\odot c_i^{b'};|c_t^b-c_i^{b'}|]\big),
+\end{equation}
+with an ITM head $m_{b,b'}=f_{\mathrm{itm}}(c_{ti}^{b,b'})$. We set $m_b^{\mathrm{pos}}=m_{b,b}$ for the matched pair and $m_b^{\mathrm{neg}}=m_{b,\pi(b)}$ for the shuffled pair. Pair-level InfoNCE scores are defined as $s_{b,b'}=\exp(\kappa)f_{\mathrm{nce}}(c_{ti}^{b,b'})$. The relation calibration losses are
+\begin{align}
+\Litm &= \tfrac{1}{2B}\sum_b\!\big[\BCE(\sigma(m_b^{\mathrm{pos}}),1)+\BCE(\sigma(m_b^{\mathrm{neg}}),0)\big],\\
+\Lnce &= -\tfrac{1}{2B}\sum_b\!\left[
+\log\frac{\exp(s_{b,b})}{\sum_{b'}\exp(s_{b,b'})}
++\log\frac{\exp(s_{b,b})}{\sum_{b'}\exp(s_{b',b})}
+\right].
+\end{align}
+The relation probability used in fusion is $p_1^b=\sigma(f_{\mathrm{gate}}([c_{ti}^{b,b};u_t^b]))$.
+
+Stage II uses deterministic soft fusion $F_{\mathrm{fuse}}(H_t^b,p_1^bV^b)$. In Stage III, we sample $r^b\sim\Bern(p_1^b)$ and select either $H_t^b$ or $F_{\mathrm{fuse}}(H_t^b,p_1^bV^b)$ for sequence labeling. The early-gate budget regularizer is
+\begin{equation}
+\Lbudget=(\bar p_0-\tau)^2,\qquad \bar p_0=\tfrac{1}{B}\sum_b p_0^b.
+\end{equation}
+Because the relation gate is applied after visual acquisition, its reward penalizes only residual fusion/injection cost:
+\begin{equation}
+R^b=[\mathrm{NLL}_{\mathrm{text}}^b-\mathrm{NLL}_{\mathrm{sel}}^b(r^b)]-\lambda_c r^b C_{\mathrm{fuse}}.
+\end{equation}
+With an EMA anchor $q^b=\sigma(f_{\mathrm{gate}}^{\mathrm{EMA}}([c_{ti}^{b,b};u_t^b]))$, the policy-gradient loss is
+\begin{align}
+\Lrl=&-\eta\tfrac{1}{B}\sum_b(\mathrm{stopgrad}(R^b)-b_{\mathrm{ma}})
+\log\pi_\phi(r^b|[c_{ti}^{b,b};u_t^b]) \\
+&+\beta_{\mathrm{KL}}\tfrac{1}{B}\sum_b\KL(\Bern(p_1^b)\|\Bern(q^b)).
+\end{align}
+The Stage III objective is
+\begin{equation}
+\Ltotal=\Lner+\alpha\Litm+\beta\Lnce+\mu\Luse+\lambda\Lbudget+\Lrl.
+\end{equation}
+Stage I warms up the text-only NER model; Stage II trains deterministic multimodal fusion with relation calibration; Stage III enables stochastic relation gating. We do not route examples by $p_0$ during training because early skipping would remove the multimodal signals required for pseudo labels and rewards. Standard supervised training only fits proxy gain labels, whereas the policy-gradient term directly optimizes the deployed discrete back-off decision under task gain minus residual cost.
+
+\section{Experiments}
+\subsection{Data \& Protocol}
+We follow the official Twitter-2015/2017 splits~\cite{lu_visual_2018,zhang_adaptive_2018}, normalize URLs and mentions, segment hashtags, and report micro-F1 under strict span matching. Gate diagnostics use proxy labels because the datasets lack human annotations for usefulness or image--text relevance. Early gating uses $y_{\mathrm{use}}=\mathbb{I}[\Delta\mathrm{NLL}>\delta]$, and relation gating uses matched-vs.-shuffled pseudo-ITM labels. These proxies are used for training and relative calibration only, not as human-aligned relevance labels. Unless stated otherwise, loss weights, thresholds, and operating points are selected on the development set; early-gate variants are compared at $\mathrm{cov}_0^\star\approx0.40$.
+
+\subsection{Comparisons and Ablations}
+We compare against controlled Text-only and Naive-MM baselines, prior MNER systems, and focused ablations. Single-stage preview uses $p_0$ for both acquisition and visual weighting. Single-stage post-visual removes $p_0$ and always encodes images. Two-stage w/o RL disables $\Lrl$, and supervised gate replaces relation-gate RL with BCE on a full-visual gain target. Hard-only, soft-only, and hard$\times$soft variants isolate the two roles of $p_1$.
+
+\subsection{Implementation Details}
+We use BERT-base-uncased and ResNet-152, with a ResNet-18 preview encoder on $112\times112$ inputs. AdamW uses smaller learning rates for pretrained backbones than for new fusion/gating heads. Text-only, Naive-MM, and RGate variants share preprocessing, encoders, fusion capacity, and a span-based decoder on the selected representation $\hat H_t$. Results are averaged over 3 random seeds unless noted; Table~\ref{tab:design_ablation} reports 5-seed mean and standard deviation. For RL, $C_{\mathrm{fuse}}$ is a fixed normalized estimate of incremental fusion/injection latency measured once on the training hardware.
+
+\subsection{Main Results}
+\FloatBarrier
+\begin{table}[!htbp]
+\caption{Main F1 comparison on Twitter-2015/2017.}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lcc}
+\toprule
+Method & Twitter-2015 & Twitter-2017 \\
+\midrule
+Text-only (same backbone/decoder as ours) & 74.78 & 86.84 \\
+Naive-MM (always-on fusion, ours) & 75.63 & 87.67 \\
+AdaCAN~\cite{zhang_adaptive_2018} & 70.68 & 82.17 \\
+UMT~\cite{yu_improving_2020} & 73.44 & 85.33 \\
+R-GCN~\cite{zhao_learning_2022} & 75.00 & 87.11 \\
+SMNER~\cite{xu_effective_2024} & 76.06 & 87.81 \\
+AMIA~\cite{xu_enhancing_2025} & 76.51 & 88.16 \\
+\midrule
+RGate-MNER & \textbf{76.99} & \textbf{89.21} \\
+\bottomrule
+\end{tabular}
+\label{tab:main_compact}
+\end{table}
+\FloatBarrier
+
+\begin{table}[!htbp]
+\caption{Design ablations on Twitter-2017. Early-gate variants target $\mathrm{cov}_0\approx0.40$; the post-visual variant encodes all images.}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lcccc}
+\toprule
+Variant & F1 & $\mathrm{cov}_0$ & $\mathrm{cov}_1$ & Std. \\
+\midrule
+Single-stage preview gate & 88.18 & 0.40 & 0.40 & 0.31 \\
+Single-stage post-visual gate & 88.67 & 1.00 & 0.52 & 0.24 \\
+Two-stage w/o RL & 88.74 & 0.40 & 0.27 & 0.21 \\
+Two-stage + supervised gate & 88.88 & 0.40 & 0.28 & 0.19 \\
+Two-stage + RL (ours) & \textbf{89.21} & 0.40 & 0.26 & 0.18 \\
+\midrule
+Hard-only gate & 88.69 & 0.40 & 0.25 & 0.29 \\
+Soft-only gate & 88.82 & 0.40 & 0.40 & 0.23 \\
+Hard$\times$soft gate (ours) & \textbf{89.21} & 0.40 & 0.26 & 0.18 \\
+\bottomrule
+\end{tabular}
+\label{tab:design_ablation}
+\end{table}
+\FloatBarrier
+
+\noindent\textbf{Analysis.}
+Table~\ref{tab:main_compact} shows that RGate-MNER improves over Naive-MM by +1.36 F1 on Twitter-2015 and +1.54 F1 on Twitter-2017 at the default $\mathrm{cov}_0\approx0.40$ operating point. Table~\ref{tab:design_ablation} shows that two-stage gating outperforms both single-stage variants, RL improves over supervised calibration, and hard$\times$soft gating gives the strongest result under matched image-encoding budget.
+
+\FloatBarrier
+\subsection{Cross-Dataset Transfer}
+We test zero-shot transfer between Twitter-2015 and Twitter-2017 by selecting all hyperparameters and deployment thresholds $(\theta_0,\theta_1)$ on the source development split and evaluating directly on the target test split without target labels. For gated models, Table~\ref{tab:cross_dataset} reports the realized target-domain coverages under frozen source-domain thresholds.
+\FloatBarrier
+\begin{table}[!htbp]
+\caption{Zero-shot cross-dataset transfer. Thresholds are selected on the source dev split and applied without target labels.}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lcccccc}
+\toprule
+\multirow{2}{*}{Method} & \multicolumn{3}{c}{2015 $\rightarrow$ 2017} & \multicolumn{3}{c}{2017 $\rightarrow$ 2015} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+ & F1 & $\mathrm{cov}_0$ & $\mathrm{cov}_1$ & F1 & $\mathrm{cov}_0$ & $\mathrm{cov}_1$ \\
+\midrule
+Text-only (same backbone) & 83.58 & 0.00 & 0.00 & 71.86 & 0.00 & 0.00 \\
+Naive-MM (always-on fusion, ours) & 83.21 & 1.00 & 1.00 & 71.34 & 1.00 & 1.00 \\
+Two-stage w/o RL & 84.37 & 0.40 & 0.27 & 72.68 & 0.45 & 0.30 \\
+RGate-MNER & \textbf{85.18} & 0.38 & 0.24 & \textbf{73.27} & 0.43 & 0.27 \\
+\bottomrule
+\end{tabular}
+\label{tab:cross_dataset}
+\end{table}
+\FloatBarrier
+
+\noindent\textbf{Analysis.}
+Table~\ref{tab:cross_dataset} shows that RGate-MNER improves by +1.97/+1.93 F1 over Naive-MM and remains stronger than the two-stage w/o RL variant. The target-domain coverages stay moderate rather than collapsing to full visual use, indicating conservative transfer of both gates under dataset shift.
+
+\FloatBarrier
+\subsection{OOD / Noisy-Split Evaluation}
+We construct controlled Twitter-2017 noisy splits. \textbf{Clean} uses original pairs; \textbf{WeakRel} replaces each image with a non-paired but semantically plausible distractor retrieved by frozen CLIP~\cite{radford_learning_2021}; \textbf{Mismatch} uniformly shuffles non-paired images; \textbf{Corr.-3/5} aggregates Gaussian blur, JPEG compression, random crop, and occlusion at severities 3 or 5~\cite{hendrycks_benchmarking_2018}.
+\FloatBarrier
+\begin{table}[!htbp]
+\caption{OOD/noisy F1 on Twitter-2017 with realized RGate coverage.}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lccccc}
+\toprule
+Split & Text-only & Naive-MM & RGate-MNER & $\mathrm{cov}_0$ & $\mathrm{cov}_1$ \\
+\midrule
+Clean    & 86.84 & 87.67 & \textbf{89.21} & 0.40 & 0.26 \\
+WeakRel  & 86.84 & 86.46 & \textbf{88.41} & 0.36 & 0.20 \\
+Mismatch & 86.84 & 85.17 & \textbf{87.16} & 0.28 & 0.12 \\
+Corr.-3  & 86.84 & 85.94 & \textbf{87.86} & 0.32 & 0.16 \\
+Corr.-5  & 86.84 & 84.53 & \textbf{86.94} & 0.24 & 0.09 \\
+\bottomrule
+\end{tabular}
+\label{tab:ood_split}
+\end{table}
+\FloatBarrier
+
+\noindent\textbf{Analysis.}
+Table~\ref{tab:ood_split} shows that Naive-MM degrades as visual reliability deteriorates, while RGate-MNER remains above Naive-MM on all noisy splits and stays close to the text-only baseline on the hardest conditions. From Clean to Mismatch, $(\mathrm{cov}_0,\mathrm{cov}_1)$ drops from $(0.40,0.26)$ to $(0.28,0.12)$, and it further drops to $(0.24,0.09)$ on Corr.-5, showing that the gates reduce both expensive visual activation and later visual injection when the visual channel becomes unreliable.
+
+\FloatBarrier
+\subsection{Sensitivity and Stability}
+The Std. column in Table~\ref{tab:design_ablation} reports seed variance; Fig.~\ref{fig:gate_calib_sweep} shows proxy calibration and threshold behavior. Because no human usefulness or image--text relevance labels are available, these plots are relative diagnostics rather than absolute human-aligned calibration. The selected operating point lies in a flat neighborhood, hard$\times$soft gating performs best under comparable coverage, and RL-calibrated gating has lower variance than simpler alternatives.
+\FloatBarrier
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=.95\linewidth]{pic/panel_gate_eval.png}
+  \caption{Gate diagnostics: (A) $p_0$ proxy-usefulness reliability; (B) $p_1$ pseudo-relatedness reliability; (C) F1 vs. $\mathrm{cov}_1$; (D) expected $\Delta\mathrm{NLL}$ vs. $\mathrm{cov}_1$.}
+  \label{fig:gate_calib_sweep}
+\end{figure}
+\FloatBarrier
+
+\subsection{Measured Cost}
+During the multimodal training stages (Stages II/III), we encode full images for all samples to construct pseudo negatives, low-variance usefulness targets, and RL rewards; conditional execution is therefore an \emph{inference-time} property rather than a training-time acceleration scheme.
+
+At inference, the model always runs the text encoder and the lightweight preview branch to compute the acquisition gate $p_0$. If $p_0<\theta_0$, it exits to the text-only path and skips the full visual encoder and deep fusion. If $p_0\ge\theta_0$, it executes the multimodal branch and computes the relation gate $p_1$; when $p_1<\theta_1$, it backs off to the text-only decoder inside the activated branch, and otherwise injects visual tokens before deep fusion. Thus, the dominant compute saving is controlled by $p_0$, while $p_1$ mainly improves robustness and can save only the residual fusion/injection cost within already activated cases.
+
+To substantiate the budget claim, Table~\ref{tab:cost} reports measured end-to-end latency, throughput, and FLOPs on a single NVIDIA A100 with batch size 1. Each number is averaged over 1{,}000 examples after 100 warm-up iterations with GPU synchronization. Because different operating points execute different kernel combinations, latency is reported as a direct end-to-end measurement rather than inferred from $\mathrm{cov}_0$ and $\mathrm{cov}_1$.
+\FloatBarrier
+\begin{table}[!htbp]
+\caption{Measured inference cost on Twitter-2017 at three operating points.}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lccccc}
+\toprule
+Setting & $\mathrm{cov}_0$ & $\mathrm{cov}_1$ & Latency (ms)$\downarrow$ & Throughput (ex/s)$\uparrow$ & FLOPs (G)$\downarrow$ \\
+\midrule
+Text-only & 0.00 & 0.00 & 8.34 & 119.90 & 21.60 \\
+Naive-MM & 1.00 & 1.00 & 17.26 & 57.94 & 45.80 \\
+RGate ($\mathrm{cov}_0\!\approx\!0.35$) & 0.35 & 0.22 & 10.46 & 95.60 & 30.10 \\
+RGate ($\mathrm{cov}_0\!\approx\!0.50$) & 0.50 & 0.31 & 12.18 & 82.10 & 34.20 \\
+RGate ($\mathrm{cov}_0\!\approx\!0.70$) & 0.70 & 0.48 & 14.83 & 67.43 & 39.60 \\
+\bottomrule
+\end{tabular}
+\label{tab:cost}
+\end{table}
+\FloatBarrier
+
+\section{Conclusion}
+RGate-MNER treats social-media MNER as budgeted selective fusion under weak image--text correlation. It separates preview-based visual acquisition from post-encoding visual trust and uses a two-threshold rule to control accuracy, coverage, and inference cost. Experiments on Twitter-2015/2017, cross-dataset transfer, noisy-image evaluation, ablations, and measured cost show improved accuracy and robustness over text-only and always-on multimodal baselines. Limitations remain: gate training relies on proxy usefulness/relatedness labels rather than human annotations, Stages II/III still encode all images during training, and evaluation is limited to single-image Twitter-style MNER. Extending the framework to multi-image and domain-specific settings is left for future work.
+
+\FloatBarrier
+\begin{credits}
+\subsubsection{\ackname}
+This work is supported by the Youth Innovation Promotion Association CAS (No.2023171).
+\subsubsection{\discintname}
+The authors have no competing interests to declare that are relevant to the content of this article.
+\end{credits}
+
+\bibliographystyle{splncs04}
+\bibliography{260317}
+\end{document}
